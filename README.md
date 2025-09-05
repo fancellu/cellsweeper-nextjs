@@ -2,6 +2,10 @@
 
 CellSweeper is a classic Minesweeper-like game implemented using Next.js and TypeScript. It also uses the beautiful components provided by the `shadcn/ui` library.
 
+## Screenshot
+
+![img.png](img.png)
+
 ## Features
 
 *   **Classic Minesweeper Gameplay:** Enjoy the familiar gameplay of revealing cells and avoiding mines.
