@@ -9,6 +9,10 @@ export default {
   ],
   theme: {
   	extend: {
+  		fontFamily: {
+  			sans: ['var(--font-chakra-petch)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+  			display: ['var(--font-silkscreen)', 'ui-monospace', 'monospace'],
+  		},
   		colors: {
   			background: 'hsl(var(--background))',
   			foreground: 'hsl(var(--foreground))',

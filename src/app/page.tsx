@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from 'react';
-import { Flag } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Flag, Pickaxe } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/toaster";
 import { useToast } from "@/hooks/use-toast";
+import { HowToPlay } from "@/components/how-to-play";
 import { useTheme } from "next-themes";
 
 const N = 10; // Grid size and number of mines
@@ -23,6 +24,8 @@ export default function Home() {
   const [score, setScore] = useState(0);
   const [gameState, setGameState] = useState<"playing" | "won" | "lost">("playing");
   const [numberOfMines, setNumberOfMines] = useState(N); // Keep track of actual mines placed
+  // Tap mode, so touch devices (which have no right-click) can place flags
+  const [mode, setMode] = useState<"dig" | "flag">("dig");
   const { toast } = useToast();
   const { resolvedTheme } = useTheme();
 
@@ -132,7 +135,7 @@ export default function Home() {
 
     // --- Handle Safe Cell Reveal ---
     let currentGrid = grid; // Start with the current state grid
-    let cellsToReveal: { r: number, c: number }[] = []; // Collect cells needing state change
+    const cellsToReveal: { r: number, c: number }[] = []; // Collect cells needing state change
     let scoreIncrement = 0;
 
     if (originalCell.neighborMines === 0) {
@@ -258,40 +261,46 @@ export default function Home() {
   };
 
   const handleCellClick = (row: number, col: number) => {
-    revealCell(row, col);
-  };
-
-  const handleCellContextMenu = (e: React.MouseEvent, row: number, col: number) => {
-    e.preventDefault(); // Prevent default context menu
-    flagCell(row, col);
+    if (mode === "flag") {
+      flagCell(row, col);
+    } else {
+      revealCell(row, col);
+    }
   };
 
   // --- Render Logic (Mostly Unchanged) ---
   return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground"> {/* Added text-foreground */}
         <Toaster />
-        <h1 className="text-3xl font-bold mb-4">CellSweeper</h1>
+        <h1 className="font-display text-3xl font-bold mb-4">CellSweeper</h1>
         <div className="flex items-center space-x-4 mb-4">
           <div>Mines Left: {minesLeft}</div>
           <div>Score: {score}</div>
           <Button variant="outline" onClick={initializeGrid}>Restart</Button>
+          <HowToPlay gridSize={N} mines={N} />
         </div>
-        {gameState === "won" && (
-            <div className="text-2xl font-bold text-green-500 mb-4">You Won!</div>
-        )}
-        {gameState === "lost" && (
-            <div className="text-2xl font-bold text-red-500 mb-4">You Lost!</div>
-        )}
+        <Button
+            variant={mode === "flag" ? "default" : "outline"}
+            className="mb-4"
+            aria-pressed={mode === "flag"}
+            onClick={() => setMode((m) => (m === "dig" ? "flag" : "dig"))}
+        >
+          {mode === "flag" ? <Flag /> : <Pickaxe />}
+          {mode === "flag" ? "Tap to flag" : "Tap to dig"}
+        </Button>
+        {/* Always rendered at a fixed height so the layout doesn't jump when the game ends */}
+        <div className="h-8 mb-4 text-2xl font-bold" aria-live="polite">
+          {gameState === "won" && <span className="text-green-500">You Won!</span>}
+          {gameState === "lost" && <span className="text-red-500">You Lost!</span>}
+        </div>
         <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${N}, minmax(0, 1fr))` }}> {/* Use gridTemplateColumns */}
           {grid.map((row, rowIndex) => (
               row.map((cell, colIndex) => (
                   <CellComponent
                       key={`${rowIndex}-${colIndex}`}
                       cell={cell}
-                      // row={rowIndex} // No longer needed by CellComponent
-                      // col={colIndex} // No longer needed by CellComponent
                       onClick={() => handleCellClick(rowIndex, colIndex)}
-                      onContextMenu={(e) => handleCellContextMenu(e, rowIndex, colIndex)}
+                      onFlag={() => flagCell(rowIndex, colIndex)}
                       resolvedTheme={resolvedTheme}
                   />
               ))
@@ -301,15 +310,72 @@ export default function Home() {
   );
 }
 
-// Simplified CellComponent props
+const LONG_PRESS_MS = 450;
+const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
+
 interface CellComponentProps {
   cell: Cell;
   onClick: () => void;
-  onContextMenu: (e: React.MouseEvent) => void;
+  /** Right-click (mouse) or long press (mouse, touch or pen) */
+  onFlag: () => void;
   resolvedTheme: string | undefined;
 }
 
-const CellComponent: React.FC<CellComponentProps> = ({ cell, onClick, onContextMenu, resolvedTheme }) => {
+const CellComponent: React.FC<CellComponentProps> = ({ cell, onClick, onFlag, resolvedTheme }) => {
+  const pressTimer = useRef<number | null>(null);
+  const pressStart = useRef<{ x: number; y: number } | null>(null);
+  const longPressFired = useRef(false);
+  const lastPointerType = useRef<string>("mouse");
+
+  const cancelPress = () => {
+    if (pressTimer.current !== null) {
+      window.clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+    pressStart.current = null;
+  };
+
+  useEffect(() => cancelPress, []);
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    lastPointerType.current = e.pointerType;
+    longPressFired.current = false;
+    if (e.button !== 0) return; // Only primary button / touch / pen; right-click flags via contextmenu
+    cancelPress();
+    pressStart.current = { x: e.clientX, y: e.clientY };
+    pressTimer.current = window.setTimeout(() => {
+      pressTimer.current = null;
+      longPressFired.current = true;
+      navigator.vibrate?.(30);
+      onFlag();
+    }, LONG_PRESS_MS);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    const start = pressStart.current;
+    if (!start) return;
+    // Finger moved too far (e.g. scrolling), so this isn't a long press
+    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > LONG_PRESS_MOVE_TOLERANCE_PX) {
+      cancelPress();
+    }
+  };
+
+  const handleClick = () => {
+    // The tap that ended a long press shouldn't also dig or toggle the flag back
+    if (longPressFired.current) {
+      longPressFired.current = false;
+      return;
+    }
+    onClick();
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    // Android also fires contextmenu on long press; our timer already handled it
+    if (lastPointerType.current !== "mouse") return;
+    onFlag();
+  };
+
   let content: React.ReactNode = null; // Use ReactNode for content
 
   if (cell.state === "revealed") {
@@ -319,7 +385,7 @@ const CellComponent: React.FC<CellComponentProps> = ({ cell, onClick, onContextM
   }
 
   // Base classes
-  let className = "w-8 h-8 flex items-center justify-center border text-sm font-bold cursor-pointer select-none transition-colors duration-200";
+  let className = "w-8 h-8 flex items-center justify-center border text-sm font-bold cursor-pointer select-none touch-manipulation transition-colors duration-200";
 
   // State-specific background classes
   switch (cell.state) {
@@ -351,8 +417,15 @@ const CellComponent: React.FC<CellComponentProps> = ({ cell, onClick, onContextM
   return (
       <div
           className={className}
-          onClick={onClick}
-          onContextMenu={onContextMenu}
+          // Stop iOS showing its long-press callout menu over the cell
+          style={{ WebkitTouchCallout: "none" }}
+          onClick={handleClick}
+          onContextMenu={handleContextMenu}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={cancelPress}
+          onPointerLeave={cancelPress}
+          onPointerCancel={cancelPress}
           // Prevent dragging behavior which can interfere with context menu
           onDragStart={(e) => e.preventDefault()}
       >
